@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="90" fill="#6366f1"/>
+  <!-- Wallet body -->
+  <rect x="96" y="168" width="320" height="216" rx="28" fill="none" stroke="white" stroke-width="28"/>
+  <!-- Wallet flap top -->
+  <path d="M160 168 L160 144 Q160 120 184 120 L328 120 Q352 120 352 144 L352 168" fill="none" stroke="white" stroke-width="24" stroke-linejoin="round"/>
+  <!-- Card slot line -->
+  <line x1="96" y1="228" x2="416" y2="228" stroke="white" stroke-width="22" opacity="0.5"/>
+  <!-- Coin circle -->
+  <circle cx="358" cy="288" r="32" fill="white"/>
+</svg>

@@ -1,6 +1,7 @@
 "use client";
 
-import { Wallet, User, Briefcase, Upload, Images } from "lucide-react";
+import { Wallet, User, Briefcase, Upload, Images, LogOut } from "lucide-react";
+import { signOut, useSession } from "next-auth/react";
 import { useMode } from "@/context/ModeContext";
 import { Mode } from "@/types/expense";
 
@@ -15,6 +16,7 @@ interface Props {
 
 export default function Navbar({ activeTab, onTabChange, onImport, onGallery }: Props) {
   const { mode, setMode, theme } = useMode();
+  const { data: session } = useSession();
 
   function handleModeToggle(newMode: Mode) {
     if (newMode !== mode) {
@@ -22,6 +24,12 @@ export default function Navbar({ activeTab, onTabChange, onImport, onGallery }: 
       if (activeTab !== "overview") onTabChange("dashboard");
     }
   }
+
+  const displayName =
+    session?.user?.name ||
+    session?.user?.email?.split("@")[0] ||
+    "";
+  const initial = displayName ? displayName.charAt(0).toUpperCase() : "?";
 
   return (
     <header className="bg-white border-b border-gray-100 sticky top-0 z-40 shadow-sm">
@@ -60,7 +68,7 @@ export default function Navbar({ activeTab, onTabChange, onImport, onGallery }: 
           </button>
         </div>
 
-        {/* Quick actions + tabs */}
+        {/* Quick actions + tabs + account */}
         <div className="flex items-center gap-0.5">
           <button
             onClick={onImport}
@@ -99,6 +107,32 @@ export default function Navbar({ activeTab, onTabChange, onImport, onGallery }: 
               </button>
             ))}
           </nav>
+
+          {/* Account */}
+          {session?.user && (
+            <>
+              <div className="w-px h-5 bg-gray-200 mx-1.5" />
+              <div className="flex items-center gap-2 px-1">
+                <div
+                  className={`w-7 h-7 rounded-full ${theme.primaryBg} text-white flex items-center justify-center text-xs font-semibold`}
+                  title={displayName}
+                >
+                  {initial}
+                </div>
+                <span className="text-xs font-medium text-gray-700 hidden lg:block max-w-[120px] truncate">
+                  {displayName}
+                </span>
+                <button
+                  onClick={() => signOut({ callbackUrl: "/login" })}
+                  title="Sign out"
+                  aria-label="Sign out"
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
+                >
+                  <LogOut size={14} />
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

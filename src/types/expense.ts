@@ -37,6 +37,8 @@ export interface Receipt {
 export interface Expense {
   id: string;
   mode: Mode;
+  /** Cognito user ID (sub) — stamped on every expense so data is per-user. */
+  userId?: string;
   date: string; // YYYY-MM-DD
   amount: number;
   category: Category;

@@ -2,7 +2,9 @@ import { Expense, Mode } from "@/types/expense";
 
 const DB_NAME = "expenseiq";
 const LEGACY_DB_NAME = "expense-tracker";
-const DB_VERSION = 1;
+// v2: switched from in-line keyPath "mode" to out-of-line keys so rows can be
+// addressed per-user, e.g. "<cognito-sub>:personal".
+const DB_VERSION = 2;
 const STORE = "expenses";
 
 const LS_KEYS: Record<Mode, string> = {
@@ -11,6 +13,12 @@ const LS_KEYS: Record<Mode, string> = {
 };
 const LS_MIGRATION_KEY = "idb_migrated_v1";
 const LEGACY_DB_MIGRATION_KEY = "idb_migrated_from_legacy_v1";
+const USER_MIGRATION_KEY_PREFIX = "idb_migrated_to_user_v1:";
+
+/** Storage-row key. Per-user when we know the user; falls back to plain mode pre-auth. */
+function rowKey(userId: string | undefined, mode: Mode): string {
+  return userId ? `${userId}:${mode}` : mode;
+}
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -22,10 +30,31 @@ function openDb(): Promise<IDBDatabase> {
       return;
     }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: "mode" });
+      const tx = req.transaction;
+      const oldVersion = event.oldVersion;
+
+      if (oldVersion < 1 || !db.objectStoreNames.contains(STORE)) {
+        // Fresh DB — create store with out-of-line keys.
+        if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+        db.createObjectStore(STORE);
+        return;
+      }
+
+      // v1 → v2 upgrade: old store used `keyPath: "mode"`. Read its rows, drop
+      // the store, recreate without a keyPath, and re-insert rows keyed by mode.
+      if (oldVersion < 2 && tx) {
+        const oldStore = tx.objectStore(STORE);
+        const getAll = oldStore.getAll();
+        getAll.onsuccess = () => {
+          const rows = (getAll.result as Array<{ mode: Mode; expenses: Expense[] }>) ?? [];
+          db.deleteObjectStore(STORE);
+          const newStore = db.createObjectStore(STORE);
+          for (const row of rows) {
+            if (row?.mode) newStore.put({ mode: row.mode, expenses: row.expenses ?? [] }, row.mode);
+          }
+        };
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -38,21 +67,27 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-async function idbGet(mode: Mode): Promise<Expense[]> {
+interface StoredRow {
+  mode: Mode;
+  expenses: Expense[];
+  userId?: string;
+}
+
+async function idbGetRaw(key: string): Promise<StoredRow | null> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(mode);
-    req.onsuccess = () => resolve((req.result?.expenses as Expense[] | undefined) ?? []);
+    const req = tx.objectStore(STORE).get(key);
+    req.onsuccess = () => resolve((req.result as StoredRow | undefined) ?? null);
     req.onerror = () => reject(req.error);
   });
 }
 
-async function idbPut(mode: Mode, expenses: Expense[]): Promise<void> {
+async function idbPutRaw(key: string, row: StoredRow): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
-    const req = tx.objectStore(STORE).put({ mode, expenses });
+    const req = tx.objectStore(STORE).put(row, key);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
     tx.onerror = () => reject(tx.error);
@@ -60,19 +95,24 @@ async function idbPut(mode: Mode, expenses: Expense[]): Promise<void> {
   });
 }
 
+async function idbDeleteRaw(key: string): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const req = tx.objectStore(STORE).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 /**
- * One-time migration: copy expenses from the legacy "expense-tracker" IndexedDB
- * into the new "expenseiq" database, then delete the old DB.
- *
- * Runs once per browser (gated by LEGACY_DB_MIGRATION_KEY in localStorage).
- * Safe to call when the legacy DB doesn't exist.
+ * One-time migration: copy expenses from the legacy "expense-tracker" IDB
+ * into "expenseiq". Safe to call when the legacy DB doesn't exist.
  */
 async function migrateFromLegacyDb(): Promise<void> {
   if (typeof window === "undefined" || typeof indexedDB === "undefined") return;
   if (localStorage.getItem(LEGACY_DB_MIGRATION_KEY) === "done") return;
 
-  // Skip if the browser can tell us the legacy DB doesn't exist.
-  // (indexedDB.databases() is available in Chrome/Edge/Safari and Firefox 126+.)
   if (typeof indexedDB.databases === "function") {
     try {
       const list = await indexedDB.databases();
@@ -89,8 +129,6 @@ async function migrateFromLegacyDb(): Promise<void> {
   try {
     legacyDb = await new Promise<IDBDatabase>((resolve, reject) => {
       const req = indexedDB.open(LEGACY_DB_NAME, 1);
-      // Intentionally no onupgradeneeded: if the DB happens not to exist we'll
-      // detect that after open by inspecting objectStoreNames.
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
@@ -99,8 +137,6 @@ async function migrateFromLegacyDb(): Promise<void> {
     return;
   }
 
-  // No expenses store => either the DB never existed (just created empty by our
-  // open call) or it was an unrelated DB of the same name. Nothing to copy.
   if (!legacyDb.objectStoreNames.contains(STORE)) {
     legacyDb.close();
     await deleteLegacyDbSafe();
@@ -117,7 +153,6 @@ async function migrateFromLegacyDb(): Promise<void> {
       req.onerror = () => reject(req.error);
     });
   } catch {
-    // Read failed — close and leave data intact so the next launch can retry.
     legacyDb.close();
     return;
   }
@@ -127,11 +162,12 @@ async function migrateFromLegacyDb(): Promise<void> {
   for (const entry of legacyData) {
     if (!entry || !Array.isArray(entry.expenses) || entry.expenses.length === 0) continue;
     try {
-      const existing = await idbGet(entry.mode);
-      if (existing.length > 0) continue; // new DB already has data for this mode — don't clobber
-      await idbPut(entry.mode, entry.expenses);
+      // Legacy rows land under the plain-mode key (no user). The first user
+      // to sign in afterwards will inherit them via migrateLegacyModeDataToUser.
+      const existing = await idbGetRaw(entry.mode);
+      if (existing && existing.expenses.length > 0) continue;
+      await idbPutRaw(entry.mode, { mode: entry.mode, expenses: entry.expenses });
     } catch {
-      // Write failed — abort migration and preserve the legacy DB for retry.
       return;
     }
   }
@@ -146,8 +182,6 @@ function deleteLegacyDbSafe(): Promise<void> {
       const req = indexedDB.deleteDatabase(LEGACY_DB_NAME);
       req.onsuccess = () => resolve();
       req.onerror = () => resolve();
-      // `blocked` fires when another tab has the legacy DB open. Skip silently;
-      // next launch will retry via the migration key still being unset.
       req.onblocked = () => resolve();
     } catch {
       resolve();
@@ -155,7 +189,7 @@ function deleteLegacyDbSafe(): Promise<void> {
   });
 }
 
-/** One-time migration: move expenses out of localStorage into IndexedDB. */
+/** One-time migration: move expenses out of localStorage into IndexedDB (under the plain-mode key). */
 async function migrateFromLocalStorage(): Promise<void> {
   if (typeof window === "undefined") return;
   if (localStorage.getItem(LS_MIGRATION_KEY) === "done") return;
@@ -166,24 +200,52 @@ async function migrateFromLocalStorage(): Promise<void> {
     try {
       const parsed = JSON.parse(raw) as Expense[];
       if (!Array.isArray(parsed) || parsed.length === 0) continue;
-      const existing = await idbGet(mode);
-      if (existing.length > 0) continue;
-      await idbPut(mode, parsed);
+      const existing = await idbGetRaw(mode);
+      if (existing && existing.expenses.length > 0) continue;
+      await idbPutRaw(mode, { mode, expenses: parsed });
       localStorage.removeItem(LS_KEYS[mode]);
     } catch {
-      // malformed or IDB failed — leave original data alone
+      /* ignore */
     }
   }
   localStorage.setItem(LS_MIGRATION_KEY, "done");
 }
 
-/** Load expenses. Tries IndexedDB; falls back to localStorage if IDB is unavailable. */
-export async function loadExpenses(mode: Mode): Promise<Expense[]> {
+/**
+ * Once per (browser + user), adopt any orphaned pre-auth data (stored under the
+ * plain mode key with no userId) into the current user's namespace. Ensures the
+ * first logged-in user inherits their previously-local expenses. Subsequent
+ * users start clean.
+ */
+async function migrateLegacyModeDataToUser(userId: string): Promise<void> {
+  if (typeof window === "undefined") return;
+  const markerKey = `${USER_MIGRATION_KEY_PREFIX}${userId}`;
+  if (localStorage.getItem(markerKey) === "done") return;
+
+  for (const mode of ["personal", "business"] as Mode[]) {
+    const legacy = await idbGetRaw(mode);
+    if (!legacy || legacy.expenses.length === 0) continue;
+
+    const userKey = rowKey(userId, mode);
+    const already = await idbGetRaw(userKey);
+    if (already && already.expenses.length > 0) continue;
+
+    const tagged = legacy.expenses.map((e) => ({ ...e, userId }));
+    await idbPutRaw(userKey, { mode, expenses: tagged, userId });
+    await idbDeleteRaw(mode);
+  }
+  localStorage.setItem(markerKey, "done");
+}
+
+/** Load expenses for a specific user + mode. */
+export async function loadExpenses(userId: string | undefined, mode: Mode): Promise<Expense[]> {
   if (typeof window === "undefined") return [];
   try {
     await migrateFromLegacyDb();
     await migrateFromLocalStorage();
-    return await idbGet(mode);
+    if (userId) await migrateLegacyModeDataToUser(userId);
+    const row = await idbGetRaw(rowKey(userId, mode));
+    return row?.expenses ?? [];
   } catch {
     const raw = localStorage.getItem(LS_KEYS[mode]);
     if (!raw) return [];
@@ -196,17 +258,21 @@ export async function loadExpenses(mode: Mode): Promise<Expense[]> {
 }
 
 /**
- * Save expenses. Prefers IndexedDB (much larger quota than localStorage).
+ * Save expenses for a specific user + mode. Prefers IndexedDB.
  * Throws on quota errors so the UI can surface them.
  */
-export async function saveExpenses(mode: Mode, expenses: Expense[]): Promise<void> {
+export async function saveExpenses(
+  userId: string | undefined,
+  mode: Mode,
+  expenses: Expense[]
+): Promise<void> {
   if (typeof window === "undefined") return;
   try {
-    await idbPut(mode, expenses);
+    await idbPutRaw(rowKey(userId, mode), { mode, expenses, userId });
     return;
   } catch (err) {
     if (isQuotaError(err)) throw err;
-    // IDB not available — fall back to localStorage
+    // IDB not available — fall back to localStorage (only safe pre-auth / single-user).
     try {
       localStorage.setItem(LS_KEYS[mode], JSON.stringify(expenses));
     } catch (lsErr) {

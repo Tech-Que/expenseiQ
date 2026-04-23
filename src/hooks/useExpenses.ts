@@ -5,9 +5,13 @@ import { Expense, Mode } from "@/types/expense";
 import { loadExpenses, saveExpenses, isQuotaError } from "@/lib/db";
 import { generateId } from "@/lib/utils";
 
-export type ExpenseInput = Omit<Expense, "id" | "createdAt">;
+export type ExpenseInput = Omit<Expense, "id" | "createdAt" | "userId">;
 
-export function useExpenses(mode: Mode) {
+/**
+ * Per-user expense store. Pass the Cognito sub as `userId`; pass undefined while
+ * the session is still hydrating and the hook will stay idle.
+ */
+export function useExpenses(userId: string | undefined, mode: Mode) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
@@ -15,7 +19,17 @@ export function useExpenses(mode: Mode) {
   useEffect(() => {
     let cancelled = false;
     setHydrated(false);
-    loadExpenses(mode)
+
+    if (!userId) {
+      // No authenticated user yet — keep the hook inert but let callers continue.
+      setExpenses([]);
+      setHydrated(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    loadExpenses(userId, mode)
       .then((data) => {
         if (cancelled) return;
         setExpenses(data);
@@ -28,14 +42,16 @@ export function useExpenses(mode: Mode) {
         );
         setHydrated(true);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, [userId, mode]);
 
   const persist = useCallback(
     (updated: Expense[]) => {
-      saveExpenses(mode, updated).then(
+      if (!userId) return;
+      saveExpenses(userId, mode, updated).then(
         () => setStorageError(null),
         (err) => {
           if (isQuotaError(err)) {
@@ -48,15 +64,17 @@ export function useExpenses(mode: Mode) {
         }
       );
     },
-    [mode]
+    [userId, mode]
   );
 
   const addExpense = useCallback(
     (input: ExpenseInput) => {
+      if (!userId) return;
       setExpenses((prev) => {
         const expense: Expense = {
           ...input,
           id: generateId(),
+          userId,
           createdAt: new Date().toISOString(),
         };
         const updated = [expense, ...prev];
@@ -64,37 +82,41 @@ export function useExpenses(mode: Mode) {
         return updated;
       });
     },
-    [persist]
+    [userId, persist]
   );
 
   const updateExpense = useCallback(
     (id: string, input: ExpenseInput) => {
+      if (!userId) return;
       setExpenses((prev) => {
-        const updated = prev.map((e) => (e.id === id ? { ...e, ...input } : e));
+        const updated = prev.map((e) => (e.id === id ? { ...e, ...input, userId } : e));
         persist(updated);
         return updated;
       });
     },
-    [persist]
+    [userId, persist]
   );
 
   const deleteExpense = useCallback(
     (id: string) => {
+      if (!userId) return;
       setExpenses((prev) => {
         const updated = prev.filter((e) => e.id !== id);
         persist(updated);
         return updated;
       });
     },
-    [persist]
+    [userId, persist]
   );
 
   const bulkAddExpenses = useCallback(
     (inputs: ExpenseInput[]) => {
+      if (!userId) return;
       setExpenses((prev) => {
         const newExpenses: Expense[] = inputs.map((input) => ({
           ...input,
           id: generateId(),
+          userId,
           createdAt: new Date().toISOString(),
         }));
         const updated = [...newExpenses, ...prev];
@@ -102,7 +124,7 @@ export function useExpenses(mode: Mode) {
         return updated;
       });
     },
-    [persist]
+    [userId, persist]
   );
 
   const dismissStorageError = useCallback(() => setStorageError(null), []);

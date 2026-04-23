@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { Expense, AppSettings } from "@/types/expense";
 import { useExpenses } from "@/hooks/useExpenses";
 import { useMode } from "@/context/ModeContext";
@@ -21,9 +23,13 @@ import { Plus, Download, FileText, AlertTriangle, X } from "lucide-react";
 
 export default function Home() {
   const { mode, theme } = useMode();
+  const { data: session, status } = useSession();
+  const router = useRouter();
 
-  const personal = useExpenses("personal");
-  const business = useExpenses("business");
+  const userId = session?.user?.id;
+
+  const personal = useExpenses(userId, "personal");
+  const business = useExpenses(userId, "business");
 
   const activeHook = mode === "personal" ? personal : business;
   const { expenses, addExpense, updateExpense, deleteExpense, bulkAddExpenses } = activeHook;
@@ -39,6 +45,13 @@ export default function Home() {
   useEffect(() => {
     setSettings(loadSettings());
   }, []);
+
+  // Belt-and-braces redirect: the middleware already gates this route, but if a
+  // client-side session becomes unauthenticated mid-use (logout, token expiry)
+  // we push the user to /login rather than leaving them in a broken state.
+  useEffect(() => {
+    if (status === "unauthenticated") router.replace("/login");
+  }, [status, router]);
 
   function handleSettingsChange(s: AppSettings) {
     setSettings(s);
@@ -74,7 +87,7 @@ export default function Home() {
     business.dismissStorageError();
   }
 
-  if (!bothHydrated) {
+  if (status === "loading" || !bothHydrated || !userId) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
@@ -136,7 +149,6 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* Business tax report button */}
             {tab === "expenses" && mode === "business" && (
               <button
                 onClick={() => setShowTaxReport(true)}
@@ -147,7 +159,6 @@ export default function Home() {
               </button>
             )}
 
-            {/* CSV export */}
             {tab === "expenses" && expenses.length > 0 && (
               <button
                 onClick={() => exportToCSV(expenses, mode)}
@@ -158,7 +169,6 @@ export default function Home() {
               </button>
             )}
 
-            {/* Add expense — hidden on overview tab */}
             {tab !== "overview" && (
               <button
                 onClick={openAdd}
@@ -171,7 +181,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Overview tab */}
         {tab === "overview" && (
           <OverviewDashboard
             personalExpenses={personal.expenses}
@@ -181,7 +190,6 @@ export default function Home() {
           />
         )}
 
-        {/* Dashboard tab */}
         {tab === "dashboard" && (
           <>
             <SummaryCards expenses={expenses} />
@@ -191,13 +199,11 @@ export default function Home() {
           </>
         )}
 
-        {/* Expenses tab */}
         {tab === "expenses" && (
           <ExpenseList expenses={expenses} onEdit={openEdit} onDelete={deleteExpense} />
         )}
       </main>
 
-      {/* Expense form modal */}
       {showForm && (
         <ExpenseForm
           onSubmit={handleFormSubmit}
@@ -206,12 +212,10 @@ export default function Home() {
         />
       )}
 
-      {/* Tax report modal */}
       {showTaxReport && (
         <TaxReport expenses={business.expenses} onClose={() => setShowTaxReport(false)} />
       )}
 
-      {/* Bank statement import wizard */}
       {showImport && (
         <ImportWizard
           existingExpenses={expenses}
@@ -220,7 +224,6 @@ export default function Home() {
         />
       )}
 
-      {/* Receipt gallery / digital filing cabinet */}
       {showGallery && (
         <ReceiptGallery expenses={expenses} onClose={() => setShowGallery(false)} />
       )}

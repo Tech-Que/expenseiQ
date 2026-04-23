@@ -39,12 +39,17 @@ export default withAuth(
 );
 
 // Matcher runs the middleware on everything EXCEPT:
-//  - /api/auth/*  — NextAuth's own endpoints (sign-in POST, JWKS, callback)
-//  - /_next/*     — Next.js internals (chunks, images, HMR)
-//  - public static assets served from /public
-// /login IS matched so we can redirect already-signed-in users away from it.
+//  - /api/auth/*                  NextAuth endpoints
+//  - /_next/static, /_next/image  Next internals
+//  - /favicon.ico, /manifest.json specific named roots
+//  - /sw.js                       service worker
+//  - /icons/*                     grouping for any future icon dir
+//  - anything ending in a common static-asset extension
+// Without the extension rules, requests for /logo-full.png etc. hit withAuth,
+// see no cookie, and get 307-redirected to /login — the image never loads.
+// /login stays IN the matcher so already-authed users can be redirected off it.
 export const config = {
   matcher: [
-    "/((?!api/auth|_next|favicon.ico|manifest.json|sw.js|icon.svg|icon-maskable.svg).*)",
+    "/((?!api/auth|_next/static|_next/image|favicon.ico|manifest.json|sw.js|icons|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.webp|.*\\.avif|.*\\.svg|.*\\.ico|.*\\.json|.*\\.js).*)",
   ],
 };

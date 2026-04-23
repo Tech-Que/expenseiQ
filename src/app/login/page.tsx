@@ -4,13 +4,13 @@ import { useState, Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
-  Wallet,
   ArrowRight,
   AlertTriangle,
   Loader2,
   CheckCircle,
   Mail,
 } from "lucide-react";
+import Logo from "@/components/Logo";
 import {
   cognitoSignIn,
   cognitoSignUp,
@@ -139,10 +139,7 @@ function LoginInner() {
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="flex flex-col items-center gap-2 mb-8">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-sm">
-            <Wallet size={22} className="text-white" />
-          </div>
-          <h1 className="text-xl font-bold text-gray-900">ExpenseIQ</h1>
+          <Logo variant="full" size={120} />
           <p className="text-sm text-gray-400">Personal &amp; business finance</p>
         </div>
 

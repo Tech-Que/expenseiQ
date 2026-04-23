@@ -1,9 +1,10 @@
 "use client";
 
-import { Wallet, User, Briefcase, Upload, Images, LogOut } from "lucide-react";
+import { User, Briefcase, Upload, Images, LogOut } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { useMode } from "@/context/ModeContext";
 import { Mode } from "@/types/expense";
+import Logo from "@/components/Logo";
 
 export type AppTab = "overview" | "dashboard" | "expenses";
 
@@ -36,10 +37,14 @@ export default function Navbar({ activeTab, onTabChange, onImport, onGallery }: 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
         {/* Logo */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className={`w-8 h-8 ${theme.primaryBg} rounded-xl flex items-center justify-center transition-colors duration-300`}>
-            <Wallet size={16} className="text-white" />
-          </div>
-          <span className="font-bold text-gray-900 text-base hidden sm:block">ExpenseIQ</span>
+          <Logo variant="mark" size={32} />
+          <span
+            className={`font-bold text-base hidden sm:inline transition-colors duration-300 ${
+              mode === "personal" ? "text-indigo-700" : "text-teal-600"
+            }`}
+          >
+            ExpenseIQ
+          </span>
         </div>
 
         {/* Mode Toggle */}

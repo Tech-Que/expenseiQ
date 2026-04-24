@@ -140,7 +140,7 @@ function LoginInner() {
         {/* Brand */}
         <div className="flex flex-col items-center gap-2 mb-8">
           <Logo variant="full" size={120} />
-          <p className="text-sm text-gray-400">Personal &amp; business finance</p>
+          <p className="text-xs text-gray-500 font-semibold tracking-wider">SMARTER EXPENSES. BETTER FINANCES.</p>
         </div>
 
         {/* Card */}
